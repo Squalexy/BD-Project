@@ -23,3 +23,5 @@ def db_connection():
 
 def is_error(message="unknown error"):
 	return {"error": message}
+
+
