@@ -15,6 +15,7 @@ cursor = connection.cursor()
 def register_user():
 	content = request.form
 
+	# insere os valores do utilizador e regista-se
 	statement = """
 				insert into utilizador(username, email, password, admin, banido) 
 				values (%s, %s, %s, %s, %s)
@@ -40,6 +41,8 @@ def register_user():
 
 @app.route('/dbproj/user', methods=['PUT'])
 def login_user():
+
+	# request do Postman
 	user = request.form.get('username')
 	password = request.form.get('password')
 
@@ -47,6 +50,7 @@ def login_user():
 	            'where username = %s and password = %s ' \
 	            'returning token;'
 
+	# obtém o estado "banido" do utilizador
 	get_user_state = 'select banido from utilizador where username = %s'
 
 	try:
@@ -59,12 +63,12 @@ def login_user():
 		return is_error(str(AuthError))
 
 	try:
-		if state[0] is not True:
+		if state[0] is not True:  # se o utilizador não estiver banido
 			cursor.execute(statement, (user, password,))
 			connection.commit()
 			rows = cursor.fetchone()
 			if len(rows) == 1:
-				return {'token': rows[0]}
+				return {'token': rows[0]}  # retorna o token do utilizador
 			else:
 				connection.rollback()
 				return is_error("access denied")
@@ -83,6 +87,8 @@ def login_user():
 
 @app.route('/dbproj/leilao', methods=['POST'])
 def cria_leilao():
+
+	# request do Postman
 	content = request.form
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
@@ -93,9 +99,8 @@ def cria_leilao():
 	# vai buscar o último ID para adicionar um novo ID único
 	get_id_statement = "select max(id) from leilao"
 	cursor.execute(get_id_statement)
-	connection.commit()
 	last_id = cursor.fetchone()
-	if last_id is None:
+	if last_id is None:  # se ainda não tiverem sido inseridos leilões, cria um novo com id = 1
 		last_id = (0,)
 
 	# cria um novo leilão
@@ -108,8 +113,8 @@ def cria_leilao():
 
 	try:
 		cursor.execute(statement, values)
-		connection.commit()
 		rows = cursor.fetchall()
+		connection.commit()
 		return jsonify({"leilaoId": str(rows[0][0])})
 
 	except (Exception, psycopg2.DatabaseError) as error:
@@ -123,8 +128,12 @@ def cria_leilao():
 
 @app.route('/dbproj/leiloes', methods=['GET'])
 def list_auctions():
+
+	# uma vez que, num contexto real, qualquer tipo de utilizador (registado e não registado) pode listar leilões,
+	# não é necessário fazer request do token ao Postman
+
 	listagem = []
-	statement = 'select * from leilao where estado = true and now() < datafimleilao'
+	statement = 'select * from leilao where estado = true'
 
 	try:
 		cursor.execute(statement)
@@ -145,6 +154,8 @@ def list_auctions():
 
 @app.route('/dbproj/leiloes/{keyword}', methods=['GET'])
 def listagem_leiloes_especificos():
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
 	r = cursor.fetchone()
@@ -154,18 +165,15 @@ def listagem_leiloes_especificos():
 	try:
 		listagem = []
 		keyword = request.args.get('keyword')
-		cursor.execute("select * from leilao where estado = true and now() < datafimleilao and codigo = %s", [keyword])
-		connection.commit()
+		# keyword pode ser 'descricao' ou 'codigo EAN'
+		list_keywords = "select * from leilao where estado = true and now() < datafimleilao and codigo = %s or descricao = %s"
+		cursor.execute(list_keywords, (keyword, keyword,))
 		rows = cursor.fetchall()
 		for row in rows:
 			listagem += [{'leilaoId': row[0], 'descricao': row[2]}]
-		cursor.execute("select * from leilao where estado = true and now() < datafimleilao and descricao = %s",
-		               [keyword])
 		connection.commit()
-		rows = cursor.fetchall()
-		for row in rows:
-			listagem += [{'leilaoId': row[0], 'descricao': row[2]}]
 		return jsonify(listagem)
+
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
 		return is_error(str(error))
@@ -177,44 +185,41 @@ def listagem_leiloes_especificos():
 
 @app.route('/dbproj/leilao/{leilaoId}', methods=['GET'])
 def auction_details():
-	# token
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
 	r = cursor.fetchone()
 	if r is None:
 		return is_error("Access denied!")
-	# fim token
-
-	n_commits = 0
 
 	leilaoId = request.args.get('leilaoId')
 
+	# pesquisa pelo leilão
 	statement_leilao = "SELECT leilao.id, leilao.descricao, datafimleilao " \
 	                   "FROM leilao WHERE leilao.id = %s;"
+
+	# pesquisa pelas mensagens do leilão
 	statement_mensagem = "SELECT mensagem.username, conteudo, dataleitura " \
 	                     "FROM mensagem WHERE mensagem.leilao_id = %s" \
 	                     "ORDER BY dataleitura;"
+
+	# pesquisa pelas licitações do leilão
 	statement_licitacao = "SELECT valor, datalicitacao, licitador " \
 	                      "FROM licitacao WHERE licitacao.leilao_id = %s" \
 	                      "ORDER BY datalicitacao;"
 
 	try:
 		cursor.execute(statement_leilao, leilaoId)
-		connection.commit()
-		n_commits += 1
 		leilao = cursor.fetchone()
 
 		cursor.execute(statement_mensagem, leilaoId)
-		connection.commit()
-		n_commits += 1
 		mensagens = cursor.fetchall()
 		lista_mensagens = []
 		for mensagem in mensagens:
 			lista_mensagens += [(mensagem[0], mensagem[1], mensagem[2])]
 
 		cursor.execute(statement_licitacao, leilaoId)
-		connection.commit()
-		n_commits += 1
 		licitacoes = cursor.fetchall()
 		lista_licitacoes = []
 		for licitacao in licitacoes:
@@ -222,11 +227,12 @@ def auction_details():
 
 		listagem = {"leilaoId": leilao[0], "descricao": leilao[1], "datafimleilao": leilao[2],
 		            "mensagens": lista_mensagens, "licitacoes": lista_licitacoes}
+
+		connection.commit()
 		return listagem
 
 	except (Exception, psycopg2.DatabaseError) as error:
-		for i in range(n_commits):
-			connection.rollback()
+		connection.rollback()
 		return is_error(str(error))
 
 
@@ -236,37 +242,40 @@ def auction_details():
 
 @app.route('/dbproj/leiloes7', methods=['GET'])
 def listagem_leiloes_ligados_ao_user():
-	# token
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
 	r = cursor.fetchone()
 	if r is None:
 		return is_error("Access denied!")
-	# fim token
 
 	try:
-		listagem = []
+		listagem = []  # lista onde vão estar todos os leilões
+
+		# procura os leilões onde o utilizador seja criador
 		cursor.execute("select * from leilao where utilizador_username = %s", [r[0]])
-		connection.commit()
 		rows = cursor.fetchall()
 		for row in rows:
 			# titulo, descricao, precoatual, datafim, codigo, utilizador_username
 			listagem += [
 				{'titulo': row[1], 'descricao': row[2], 'precoatual': row[3], 'datafim': row[4], 'codigo': row[6],
 				 'Criador leilao': row[7]}]
+
+		# procura os leilões onde utilizador seja licitador
 		cursor.execute("select * from licitacao where licitador = %s", [r[0]])
-		connection.commit()
+
 		rows = cursor.fetchall()
 		for row in rows:
-			print(row)
 			# vai buscar as informacoes de cada leilao
 			# titulo, descricao, precoatual, datafim, codigo, utilizador_username
 			row_aux = funcao_aux(row[2])
-			print("AQUI")
-			print(row_aux)
 			listagem += [{'titulo': row_aux[0][1], 'descricao': row_aux[0][2], 'precoatual': row_aux[0][3],
 			              'datafim': row_aux[0][4], 'codigo_aux': row_aux[0][6], 'Criador leilao': row_aux[0][7]}]
+
+		connection.commit()
 		return jsonify(listagem)
+
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
 		return is_error(str(error))
@@ -285,6 +294,8 @@ def funcao_aux(id_leilao):
 
 @app.route('/dbproj/licitar/{leilaoId}/{licitacao}', methods=['GET'])
 def licitar_leilao():
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
 	r = cursor.fetchone()
@@ -302,17 +313,27 @@ def licitar_leilao():
 		cursor.execute("select * from leilao where estado = true and now() < datafimleilao and id = %s", [leilaoId])
 		rows = cursor.fetchone()
 
+		# procura o valor atual do leilão onde pretende fazer a licitação
+		cursor.execute("select precoatual from leilao where id = %s", [leilaoId])
+		preco_atual = cursor.fetchone()
+
 		# verifica que a licitação é maior que o valor máximo atual
-		cursor.execute("select * from licitacao where  valor < %s", [licitacao])
-		valid_value = cursor.fetchone()
+		if float(preco_atual[0]) > float(licitacao):
+			connection.rollback()
+			return is_error("Licitação é menor que o preço atual")
+
+		# tentou fazer-se da seguinte forma mas o python estava a dar erro:
+		# "WHERE %s > (SELECT precoatual FROM leilao where id = %s)", logo a seguir aos VALUES
 
 		# faz uma licitação
-		licitacao_statement = "insert into licitacao (valor,datalicitacao,leilao_id,utilizador_username,licitador) " \
-		                      "values (%s, %s,%s,%s,%s);"
+		licitacao_statement = "INSERT INTO licitacao (valor,datalicitacao,leilao_id,utilizador_username,licitador) " \
+		                      "VALUES (%s,%s,%s,%s,%s)"
+
 		licitacao_values = (licitacao, dt_string, leilaoId, rows[7], r[0])
+
 		cursor.execute(licitacao_statement, licitacao_values)
 
-		# trigger aqui
+		# trigger acontece aqui
 
 		connection.commit()
 
@@ -329,62 +350,67 @@ def licitar_leilao():
 
 @app.route('/dbproj/leilao/{leilaoId}', methods=['PUT'])
 def editar_propriedades_leilao():
-	# token
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select username from utilizador where token = %s", [token])
 	r = cursor.fetchone()
 	if r is None:
 		return is_error("Access denied!")
-	# fim token
 
 	leilao_id = request.args.get('leilaoId')
 	titulo = request.form.get('titulo')
 	descricao = request.form.get('descricao')
 
 	try:
+
 		# vai buscar o leilao a ser alterado e vamos colocar as informacoes textuais na tabela de historico
 		statement = 'select * from leilao where id = %s and utilizador_username = %s'
 		cursor.execute(statement, (leilao_id, r[0],))
 		connection.commit()
 		rows = cursor.fetchall()
-		if rows == []:
+
+		if not rows:  # se o leilão não existir
 			return is_error("Sem leiloes")
+
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
 		return is_error(str(error))
-	statement = """
-                        insert into historico_textual (titulo, descricao, leilao_id, data_modif) 
-                        values (%s, %s, %s, %s)
-                        """
+
+	# insere as alterações no histórico textual
+	statement = "insert into historico_textual (titulo, descricao, leilao_id, data_modif) values (%s, %s, %s, %s)"
+
 	try:
 		now = datetime.now()  # datetime object containing current date and time
 		dt_string = now.strftime("%Y-%m-%d %H:%M:%S")
 		values = (rows[0][1], rows[0][2], rows[0][0], dt_string)
 		cursor.execute(statement, values)
 		connection.commit()
+
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
 		return is_error(str(error))
 
 	# vai atualizar o leilao
 	try:
-		if titulo is None and descricao is None:
+		if titulo is None and descricao is None: # se não houver nenhuma alteração textual
 			return is_error("Sem alteracoes a efetuar")
-		elif titulo is None:
+		elif titulo is None: # se apenas se alterar o título
 			cursor.execute("update leilao set descricao = %s where id = %s", (descricao, leilao_id,))
-		elif descricao is None:
+		elif descricao is None: # se apenas se alterar a descrição
 			cursor.execute("update leilao set titulo = %s where id = %s", (titulo, leilao_id,))
-		else:
+		else: # se se alterar título e descrição
 			cursor.execute("update leilao set titulo = %s, descricao = %s where id = %s",
 			               (titulo, descricao, leilao_id,))
 		connection.commit()
 
 		# vai buscar as informacoes do leilao (atualizadas) e imprime
 		cursor.execute("select * from leilao where id = %s", [leilao_id])
-		connection.commit()
 		rows = cursor.fetchall()
 		listagem = [{'titulo': rows[0][1], 'descricao': rows[0][2], 'precoatual': rows[0][3], 'datafim': rows[0][4],
 		             'codigo_aux': rows[0][6], 'Criador leilao': rows[0][7]}]
+
+		connection.commit()
 		return jsonify(listagem)
 
 	except (Exception, psycopg2.DatabaseError) as error:
@@ -398,31 +424,58 @@ def editar_propriedades_leilao():
 
 @app.route('/dbproj/{idLeilao}/mural', methods=['POST'])
 def write_message():
-	# token
+
+	# request do Postman
 	token = request.args.get('token')
-	cursor.execute("select username from utilizador where token = %s", [token])
+	cursor.execute("select username from utilizador where token = %s and banido = false", [token])
 	r = cursor.fetchone()
 	if r is None:
 		return is_error("Access denied!")
-	# fim token
 
 	idLeilao = request.args.get('idLeilao')
 	mensagem = request.args.get('mensagem')
 
-	statement = "insert into mensagem(leilao_id, username, conteudo, tipo, data_envio) values (%s, %s, %s, %s, %s)"
-
-	mensagens = "select data_envio, username, conteudo from mensagem where leilao_id = %s and tipo = %s;"
-
 	now = datetime.now()
-	values = (idLeilao, r[0], mensagem, "mural", now.strftime("%Y-%m-%d %H:%M:%S"))
-	msg_values = (idLeilao, "mural")
 
 	try:
+
+		# insere a mensagem no mural do leilão
+		statement = "insert into mensagem(leilao_id, username, conteudo, tipo, data_envio) values (%s, %s, %s, %s, %s)"
+		values = (idLeilao, r[0], mensagem, "mural", now.strftime("%Y-%m-%d %H:%M:%S"))
 		cursor.execute(statement, values)
-		connection.commit()
+
+		# armazena as mensagens do mural do leilão
+		mensagens = "select data_envio, username, conteudo from mensagem where leilao_id = %s and tipo = %s;"
+		msg_values = (idLeilao, "mural")
 		cursor.execute(mensagens, msg_values)
-		connection.commit()
 		fetch_msg = cursor.fetchall()
+
+		# procura o nome do criador do leilão
+		seleciona_criador = "select utilizador_username from leilao where id = %s"
+		cursor.execute(seleciona_criador, (idLeilao,))
+		criador = cursor.fetchone()
+
+		# notifica o criador do leilão
+		notifica_criador = "insert into mensagem (leilao_id, username, conteudo, tipo, data_envio) values (%s, %s, %s, %s, %s)"
+		values_criador = (
+			idLeilao, criador[0], "Nova mensagem publicada no mural", "notificacao", now.strftime("%Y-%m-%d %H:%M:%S"))
+		cursor.execute(notifica_criador, values_criador)
+
+		# procura os utilizadores que escreveram no mural a notificar da nova mensagem do mural
+		users_a_notificar = "select DISTINCT username from mensagem where tipo = %s and leilao_id = %s and username != %s"
+		cursor.execute(users_a_notificar, ("mural", idLeilao, r[0],))
+		users = cursor.fetchall()
+
+		# notifica esses utilizadores
+		statement_two = "insert into mensagem (leilao_id, username, conteudo, tipo, data_envio) values (%s, %s, %s, %s, %s)"
+		for user in users:
+			print(user)
+			now = datetime.now()
+			values_users = (
+			idLeilao, user[0], "Nova mensagem publicada no mural", "notificacao", now.strftime("%Y-%m-%d %H:%M:%S"))
+			cursor.execute(statement_two, values_users)
+
+		connection.commit()
 		return jsonify(fetch_msg)
 
 	except (Exception, psycopg2.DatabaseError) as error:
@@ -436,6 +489,8 @@ def write_message():
 
 @app.route('/dbproj/terminar', methods=['POST'])
 def end_auctions():
+
+	# request do Postman
 	token = request.args.get('token')
 	cursor.execute("select * from utilizador where token = %s", [token])
 	r = cursor.fetchone()
@@ -443,17 +498,38 @@ def end_auctions():
 		return is_error("Access denied!")
 
 	try:
+
+		# update do estado do leilão, mete-o inativo e mete a descrição = "Leilão terminou"
 		now = datetime.now()
 		expirated_auctions = "UPDATE leilao " \
-		                     "SET estado = %s, descricao = %s" \
-		                     "WHERE %s > datafimleilao"
+		                     "SET estado = %s, descricao = %s " \
+		                     "WHERE %s > datafimleilao and estado = true"
 		expired_values = ("false", "Leilão terminou!", now.strftime("%Y-%m-%d %H:%M:%S"))
 		cursor.execute(expirated_auctions, expired_values)
-		connection.commit()
+
+		# acede aos leilões já terminados
+		cursor.execute("SELECT * FROM leilao WHERE estado = false AND descricao LIKE 'Leilão terminou!'")
+		leiloesterminados = cursor.fetchall()
+
+		# percorre cada leilão terminado para saber na tabela licitação qual o maior valor e de quem é
+		for leilaoterminado in leiloesterminados:
+			print(leilaoterminado)
+			cursor.execute("select licitador "
+			               "from licitacao "
+			               "where valor = %s", [leilaoterminado[3]])
+			valor = cursor.fetchone()
+
+			# depois de encontrado o maior valor adiciona na tabela utilizador e diz que o leilão foi ganho
+			for v in valor:
+				print(v)
+				cursor.execute("update utilizador set leiloes_ganhos = leiloes_ganhos + 1 where username = %s", [v])
+				cursor.execute("update leilao set descricao = 'Leilão ganho!' where id = %s", [leilaoterminado[0]])
+				break
 
 		cursor.execute("SELECT * FROM leilao WHERE estado = false")
-		connection.commit()
 		rows = cursor.fetchall()
+
+		connection.commit()
 
 		return jsonify(rows)
 
@@ -468,10 +544,12 @@ def end_auctions():
 
 @app.route('/dbproj/cancelar/{leilaoId}', methods=['POST'])
 def cancelar_leilao():
+
+	# request do Postman
 	token = request.args.get('token')
-	cursor.execute("select username from utilizador where token = %s", [token])
+	cursor.execute("select * from utilizador where token = %s", [token])
 	r = cursor.fetchone()
-	if r is None:
+	if r is None or r[3] is False:
 		return is_error("Access denied!")
 
 	try:
@@ -479,41 +557,35 @@ def cancelar_leilao():
 		now = datetime.now()  # datetime object containing current date and time
 		dt_string = now.strftime("%Y-%m-%d %H:%M:%S")  # dd/mm/YY H:M:S
 
-		# verifica que o leilão é válido,se ja nao acabou basicamente
+		# verifica que o leilão ainda é válido, caso contrário já terminou
 		cursor.execute("select * from leilao where estado = true and now() < datafimleilao and id = %s", [leilaoId])
-		connection.commit()
 
-		# atualiza datafimleilao para a data de agora
-		cursor.execute("update leilao set datafimleilao = %s where id = %s", (dt_string, leilaoId,))
+		# atualiza datafimleilao para a data de agora e atualiza estado para false
+		cursor.execute("update leilao set datafimleilao = %s, estado = %s "
+		               "where id = %s", (dt_string, leilaoId, leilaoId,))
 
-		# atualiza estado de leilao para false
-		cursor.execute("update leilao set estado = %s where id = %s", ("false", leilaoId))
-		connection.commit()
-
-		# atualiza licitacoes
+		# atualiza licitações do utilizador, metendo-as como canceladas
 		cursor.execute("update licitacao set cancelada = true where leilao_id = %s", [leilaoId])
-		connection.commit()
 
 		# vai buscar as informacoes do leilao (atualizadas) e imprime
 		cursor.execute("select * from leilao where id = %s", [leilaoId])
-
-		connection.commit()
 		rows = cursor.fetchall()
 		listagem = [{'titulo': rows[0][1], 'descricao': rows[0][2], 'precoatual': rows[0][3], 'datafim': rows[0][4],
 		             'estado': rows[0][5], 'codigo': rows[0][6], 'Criador leilao': rows[0][7]}]
 
-		# vai à tabela de licitações, procura as pessoas que fizeram licitacoes num determinado leilao
+		# vai à tabela de licitações, procura as pessoas que fizeram licitacoes no leilão cancelado
 		notificar_pessoas = "select * from licitacao where leilao_id = %s"
 		cursor.execute(notificar_pessoas, leilaoId)
-		connection.commit()
 		notificar_pessoas = cursor.fetchall()
+
 		for notifica_pessoa in notificar_pessoas:
-			# envia notificação às pessoas que licitaram no leilao
+			# envia notificação às pessoas que licitaram no leilao a dizer que este foi cancelado
 			notificacao_statement = "insert into mensagem (username, conteudo, tipo, data_envio, leilao_id)" \
 			                        "values (%s, %s, %s, %s, %s)"
 			notif = "O leilãoId [{}] foi cancelado!".format(leilaoId)
 			notificacao_values = (notifica_pessoa[4], notif, "notificacao", now, leilaoId)
 			cursor.execute(notificacao_statement, notificacao_values)
+
 		connection.commit()
 		return jsonify(listagem)
 
@@ -528,19 +600,20 @@ def cancelar_leilao():
 
 @app.route('/dbproj/banir', methods=['PUT'])
 def banir_user():
-	# token
+
+	# request do Postman
 	token = request.args.get('token')
-	statement = 'select username from utilizador where token = %s and admin = true'
-	cursor.execute(statement, (token,))
+	cursor.execute("select * from utilizador where token = %s", [token])
 	r = cursor.fetchone()
-	if r is None:
+	if r is None or r[3] is False:
 		return is_error("Access denied!")
-	# fim token
 
 	user_banido = request.form.get('username')
-	# vai banir o utilizador
+
 	try:
+		# vai banir o utilizador
 		cursor.execute("update utilizador set banido = true where username = %s", [user_banido])
+
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
 		return is_error(str(error))
@@ -548,22 +621,20 @@ def banir_user():
 	try:
 		# vai buscar os leiloes que ele criou e coloca o estado deles a false
 		cursor.execute("update leilao set estado = false where utilizador_username = %s", [user_banido])
-		connection.commit()
 
-		# vai buscar os leiloes que ele criou ja atualizados
+		# vai buscar os leiloes que ele criou, ja atualizados
 		cursor.execute("select * from leilao where utilizador_username = %s", [user_banido])
-		connection.commit()
 		rows = cursor.fetchall()
 
 		for row in rows:
 			# para cada leilao, coloca todas as licitacoes desse leilao como canceladas
 			cursor.execute("update licitacao set cancelada = true where leilao_id = %s", [row[0]])
-			connection.commit()
+
 			# vai à tabela de licitações, procura as pessoas que fizeram licitacoes num determinado leilao
-			notificar_pessoas = ("select * from licitacao where leilao_id = %s and licitador != %s")
+			notificar_pessoas = "select * from licitacao where leilao_id = %s and licitador != %s"
 			cursor.execute(notificar_pessoas, (row[0], user_banido,))
-			connection.commit()
 			notificar_pessoas = cursor.fetchall()
+
 			for notifica_pessoa in notificar_pessoas:
 				# envia notificação às pessoas que licitaram no leilao
 				notificacao_statement = "insert into mensagem (username, conteudo, tipo, data_envio, leilao_id)" \
@@ -575,46 +646,43 @@ def banir_user():
 		# vai as licitacoes que ele efetuou e coloca-as como canceladas
 		statement = 'update licitacao set cancelada = true where licitador = %s'
 		cursor.execute(statement, (user_banido,))
-		connection.commit()
 
-		# vai retornar eleicoes distintas em que o user licitou
+		# vai retornar ids de leilões distintos em que o user licitou
 		statement = 'select DISTINCT leilao_id from licitacao where licitador = %s'
 		cursor.execute(statement, (user_banido,))
-		connection.commit()
 		rows = cursor.fetchall()
+
 		for row in rows:
-			# vai buscar a cada leilao o valor maximo que o user banido apostou
+
+			# vai buscar a cada leilao cada licitação do user banido
 			aux = 'select MAX(valor) from licitacao where licitador = %s and leilao_id = %s'
 			cursor.execute(aux, (user_banido, row[0],))
-			connection.commit()
 			maximo = cursor.fetchone()
 
 			# vai atualizar no leilao o valor atual
 			aux_dois = 'update leilao set precoatual = %s where id = %s'
 			cursor.execute(aux_dois, (maximo[0], row[0],))
-			connection.commit()
 
 			# vai cancelar todas as licitacoes desse leilao cujo valor seja maior que o maximo
 			aux_tres = 'update licitacao set cancelada = true where leilao_id = %s and valor > %s'
 			cursor.execute(aux_tres, (row[0], maximo[0],))
-			connection.commit()
 
 			# vai buscar a licitacao mais alta para depois se atualizar o valor
 			aux_quatro = 'select MAX(valor) from licitacao where leilao_id = %s'
 			cursor.execute(aux_quatro, (row[0],))
 			auxiliar = cursor.fetchone()
-			connection.commit()
 
-			# vai atualizar a proposta maior para o valor maximo
+			# vai atualizar a licitação mais alta para o valor maximo
 			aux_cinco = 'update licitacao set valor = %s, cancelada = false where leilao_id = %s and valor = %s and licitador != %s'
 			cursor.execute(aux_cinco, (maximo[0], row[0], auxiliar[0], user_banido,))
-			connection.commit()
+
 			# vai à tabela de licitações, procura as pessoas que fizeram licitacoes num determinado leilao
-			notificar_pessoas = ("select * from licitacao where leilao_id = %s and licitador != %s")
+			notificar_pessoas = "select * from licitacao where leilao_id = %s and licitador != %s"
 			cursor.execute(notificar_pessoas, (row[0], user_banido,))
-			connection.commit()
 			notificar_pessoas = cursor.fetchall()
+
 			for notifica_pessoa in notificar_pessoas:
+
 				# envia notificação às pessoas que licitaram no leilao
 				notificacao_statement = "insert into mensagem (username, conteudo, tipo, data_envio, leilao_id)" \
 				                        "values (%s, %s, %s, %s, %s)"
@@ -622,7 +690,52 @@ def banir_user():
 					row[0])
 				notificacao_values = (notifica_pessoa[4], notif, "notificacao", datetime.now(), row[0])
 				cursor.execute(notificacao_statement, notificacao_values)
+
+		connection.commit()
 		return jsonify('Sucesso')
+
+	except (Exception, psycopg2.DatabaseError) as error:
+		connection.rollback()
+		return is_error(str(error))
+
+
+##########################################################
+# 16 - ADMINISTRADOR PODE OBTER ESTATISTICAS
+##########################################################
+
+@app.route('/dbproj/estatisticas', methods=['GET'])
+def estatisticas_leilao():
+
+	# request do Postman
+	token = request.args.get('token')
+	cursor.execute("select * from utilizador where token = %s", [token])
+	r = cursor.fetchone()
+	if r is None or r[3] is False:
+		return is_error("Access denied!")
+
+	try:
+
+		# top 10 utilizadores com mais leiloes criados
+		cursor.execute("select utilizador_username,count(utilizador_username) "
+		               "from leilao group by utilizador_username order by count(utilizador_username) desc limit 10")
+		top10utilizadores = cursor.fetchall()
+
+		# top 10 utilizadores que mais leiloes venceram
+		cursor.execute("select username,leiloes_ganhos from utilizador  "
+		               "group by username order by leiloes_ganhos desc limit 10")
+		top10utilizadoresvencedores = cursor.fetchall()
+
+		# numero total de leiloes nos ultimos 10 dias
+		cursor.execute("select * from leilao where datafimleilao < current_date  - interval '10' day "
+		               "and estado = false OR datafimleilao > current_date and estado = true")
+		leiloes10dias = cursor.fetchall()
+
+		connection.commit()
+
+		return jsonify("Top 10 utilizadores com mais leiloes criados ", top10utilizadores,
+		               "Top 10 utilizadors que mais leiloes venceram ",
+		               top10utilizadoresvencedores, "Numero total de leiloes nos ultimos 10 dias ",
+		               len(leiloes10dias))
 
 	except (Exception, psycopg2.DatabaseError) as error:
 		connection.rollback()
